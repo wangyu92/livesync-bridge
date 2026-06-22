@@ -2,7 +2,13 @@ version: "2.1"
 services:
   bridge:
     build: .
+    container_name: livesync-bridge
     volumes:
       - ./data:/app/data
       - ./dat:/app/dat
+    networks: [couchdb-net]
     restart: unless-stopped
+networks:
+  couchdb-net:
+    name: couchdb_default      # CouchDB compose(Obsidian/couchdb)가 만든 네트워크
+    external: true
