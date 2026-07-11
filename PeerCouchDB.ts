@@ -45,7 +45,17 @@ export class PeerCouchDB extends Peer {
         const old = await this.man.get(path as FilePathWithPrefix, true) as false | MetaEntry;
         // const old = await this.getMeta(path as FilePathWithPrefix);
         if (old && Math.abs(this.compareDate(info, old)) < 3600) {
-            const oldDoc = await this.man.getByMeta(old);
+            let oldDoc: false | ReadyEntry = false;
+            try {
+                oldDoc = await this.man.getByMeta(old);
+            } catch (ex) {
+                // The old revision has missing/corrupted chunks in the remote DB.
+                // We cannot compare for de-duplication, so skip that optimization and
+                // fall through to overwrite it with the current (good) content — this
+                // both avoids crashing the process on an uncaught throw and self-heals
+                // the corrupted document from the plain-text mirror on disk.
+                this.normalLog(` Corrupted old revision for ${path}, overwriting from disk: ${ex instanceof Error ? ex.message : ex}`);
+            }
             if (oldDoc && ("data" in oldDoc)) {
                 const d = oldDoc.type == "plain" ? createTextBlob(oldDoc.data) : createBinaryBlob(new Uint8Array(decodeBinary(oldDoc.data)));
                 if (await isDocContentSame(d, saveData)) {

@@ -134,26 +134,44 @@ export class PeerStorage extends Peer {
     async get(pathSrc: string): Promise<false | FileData> {
         const lp = this.toLocalPath(pathSrc);
         const path = this.toStoragePath(lp);
-        const stat = await Deno.stat(path);
-        if (!stat.isFile) {
-            return false;
+        try {
+            const stat = await Deno.stat(path);
+            if (!stat.isFile) {
+                return false;
+            }
+            const ret: FileData = {
+                ctime: stat.mtime?.getTime() ?? 0,
+                mtime: stat.mtime?.getTime() ?? 0,
+                size: stat.size,
+                data: [],
+            };
+            if (isPlainText(path)) {
+                ret.data = [await Deno.readTextFile(path)];
+            } else {
+                ret.data = await Deno.readFile(path);
+            }
+            return ret;
+        } catch (ex) {
+            // The file can vanish between the watcher event and this read
+            // (atomic-save temp files get renamed away). Treat as "gone"
+            // instead of letting an uncaught NotFound crash the process.
+            if (ex instanceof Deno.errors.NotFound) {
+                return false;
+            }
+            throw ex;
         }
-        const ret: FileData = {
-            ctime: stat.mtime?.getTime() ?? 0,
-            mtime: stat.mtime?.getTime() ?? 0,
-            size: stat.size,
-            data: [],
-        };
-        if (isPlainText(path)) {
-            ret.data = [await Deno.readTextFile(path)];
-        } else {
-            ret.data = await Deno.readFile(path);
-        }
-        return ret;
+    }
+
+    /** Editors (Obsidian, Linter) save atomically as `<name>.tmp.<pid>.<hex>`
+     *  then rename onto the real file. These transient files must never be
+     *  synced or stat-ed — they are gone within milliseconds. */
+    isAtomicWriteTemp(path: string): boolean {
+        return /\.tmp\.\d+\.[0-9a-f]+$/i.test(path);
     }
     watcher?: chokidar.FSWatcher;
 
     async dispatch(pathSrc: string) {
+        if (this.isAtomicWriteTemp(pathSrc)) return;
         const lP = this.toStoragePath(this.toLocalPath("."));
         const path = this.toPosixPath(relative(lP, pathSrc));
 
@@ -175,6 +193,7 @@ export class PeerStorage extends Peer {
         });
     }
     async dispatchDeleted(pathSrc: string) {
+        if (this.isAtomicWriteTemp(pathSrc)) return;
         const lP = this.toStoragePath(this.toLocalPath("."));
         const path = this.toPosixPath(relative(lP, pathSrc));
         await scheduleOnceIfDuplicated(pathSrc, async () => {
